@@ -1,0 +1,120 @@
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import FileResponse
+from starlette.staticfiles import StaticFiles
+
+app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# serve static files
+@app.get("/")
+async def main():
+    return FileResponse("public/index.html")
+
+# chatbot API to be extended with OpenAI code
+@app.post("/chat")
+async def chat(request: Request):
+    json = await request.json()
+    print(json)
+
+    import os
+    import openai
+
+
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT_ID")
+
+    client = openai.AzureOpenAI(
+        base_url=f"{endpoint}/openai/deployments/{deployment}/extensions",
+        api_key=api_key,
+        api_version="2023-08-01-preview",
+    )
+
+    completion = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {
+                "role": "user",
+                "content": json["message"],
+            },
+        ],
+        extra_body={
+            "dataSources": [
+                {
+                    "type": "AzureCognitiveSearch",
+                    "parameters": {
+                        "endpoint": os.environ["AZURE_AI_SEARCH_ENDPOINT"],
+                        "key": os.environ["AZURE_AI_SEARCH_API_KEY"],
+                        "indexName": os.environ["AZURE_AI_SEARCH_INDEX"],
+                        "inScope": True,
+                        "roleInformation": "You are an AI assistant that helps people find information.",
+                        "filter": None,
+                        "strictness": 3,
+                        "topNDocuments": 20
+                    }
+                }
+            ]
+        }
+    )
+
+    print(completion.model_dump_json(indent=2))
+
+    return {"message": completion.choices[0].message.content}
+
+# Image generattion API to be extended with OpenAI code
+@app.post("/generateImage")
+async def generateImage(request: Request):
+    input = await request.json()
+
+    import os
+    import openai
+    from openai import AzureOpenAI
+    import json
+
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT_ID")
+
+    client = openai.AzureOpenAI(
+        azure_endpoint = endpoint,
+        api_key=api_key,
+        api_version="2024-02-01",
+    )
+
+    completion = client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {
+                "role": "user",
+                "content": "Please create a propor DALL-E prompt based on the following json message:"+json.dumps(input)
+            }
+        ])
+
+    prompt_image = completion.choices[0].message.content
+    
+    client = AzureOpenAI(
+        api_version="2024-02-01",
+        azure_endpoint="https://team3openai.openai.azure.com/",
+        api_key=os.environ["AZURE_OPENAI_API_KEY"]
+    )
+
+    result = client.images.generate(
+        model="Dalle3", # the name of your DALL-E 3 deployment
+        prompt=prompt_image,
+        n=1
+    )
+
+    image_url = json.loads(result.model_dump_json())['data'][0]['url']
+    print (result)
+    return {"url": image_url}
+
+app.mount("/", StaticFiles(directory="public"), name="ui")
